@@ -1,16 +1,20 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Text;
-using System.Threading.Tasks;
 using System.Drawing;
 using System.Collections;
-using System.Threading;
 
 namespace DontWanaCrypt
 {
     public static class BinaryUtils
     {
+        public static byte[] BitArrayToByteArray(BitArray bits)
+        {
+            byte[] ret = new byte[(bits.Length - 1) / 8 + 1];
+            bits.CopyTo(ret, 0);
+            return ret;
+        }
+
         public static BitArray Prepend(this BitArray current, BitArray before)
         {
             var bools = new bool[current.Count + before.Count];
@@ -19,6 +23,7 @@ namespace DontWanaCrypt
             return new BitArray(bools);
         }
     }
+
     public static class BinaryConverter
     {
         public static BitArray ToBinary(this int numeral) => new BitArray(new[] { numeral });
@@ -38,8 +43,6 @@ namespace DontWanaCrypt
 
     class Program
     {
-        
-
         static Bitmap EncryptBitmap(string path, BitArray messageBits)
         {
             // should be 32 bits
@@ -47,7 +50,6 @@ namespace DontWanaCrypt
 
             messageBits = messageBits.Prepend(messageSizeBits);
 
-            int bitsPerPixel = 3;
             int i = 0;
 
             var bitmap = new Bitmap(path);
@@ -124,13 +126,6 @@ namespace DontWanaCrypt
             return new BitArray(bits.ToArray());
         }
 
-        public static byte[] BitArrayToByteArray(BitArray bits)
-        {
-            byte[] ret = new byte[(bits.Length - 1) / 8 + 1];
-            bits.CopyTo(ret, 0);
-            return ret;
-        }
-
         // TODO: encode message length too
         static void Main(string[] args)
         {
@@ -151,7 +146,7 @@ namespace DontWanaCrypt
             Console.WriteLine("Decrypting...");
             var decrypted = DecryptBitmap(encryptedBitmap);
 
-            byte[] decryptedMessageBytes = BitArrayToByteArray(decrypted);
+            byte[] decryptedMessageBytes = BinaryUtils.BitArrayToByteArray(decrypted);
             string decryptedAscii = Encoding.ASCII.GetString(decryptedMessageBytes);
             Console.WriteLine(decryptedAscii);
             Console.WriteLine("Done...");
