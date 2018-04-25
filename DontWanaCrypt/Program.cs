@@ -3,56 +3,73 @@ using System.Collections.Generic;
 using System.Text;
 using System.Drawing;
 using System.Collections;
+using System.Threading;
+using System.Drawing.Imaging;
+using System.Security.Cryptography;
+using System.IO;
+using System.Diagnostics;
+using System.Linq;
 
 namespace DontWanaCrypt
 {
-    public static class BinaryUtils
+    enum DataType: byte
     {
-        public static byte[] BitArrayToByteArray(BitArray bits)
-        {
-            byte[] ret = new byte[(bits.Length - 1) / 8 + 1];
-            bits.CopyTo(ret, 0);
-            return ret;
-        }
-
-        public static BitArray Prepend(this BitArray current, BitArray before)
-        {
-            var bools = new bool[current.Count + before.Count];
-            before.CopyTo(bools, 0);
-            current.CopyTo(bools, before.Count);
-            return new BitArray(bools);
-        }
+        PlainText,
+        Image,
     }
 
-    public static class BinaryConverter
+   class Program
     {
-        public static BitArray ToBinary(this int numeral) => new BitArray(new[] { numeral });
-
-        public static int ToNumeral(this BitArray binary)
+        static void PrintBanner()
         {
-            if (binary == null)
-                throw new ArgumentNullException("binary");
-            if (binary.Length > 32)
-                throw new ArgumentException("must be at most 32 bits long");
-
-            var result = new int[1];
-            binary.CopyTo(result, 0);
-            return result[0];
+            Console.WriteLine(@" _____              _ _    __          __                  _____                  _");
+            Console.WriteLine(@"|  __ \            ( ) |   \ \        / /                 / ____|                | |");
+            Console.WriteLine(@"| |  | | ___  _ __ |/| |_   \ \  /\  / /_ _ _ __   __ _  | |     _ __ _   _ _ __ | |_");
+            Console.WriteLine(@"| |  | |/ _ \| '_ \  | __|   \ \/  \/ / _` | '_ \ / _` | | |    | '__| | | | '_ \| __|");
+            Console.WriteLine(@"| |__| | (_) | | | | | |_     \  /\  / (_| | | | | (_| | | |____| |  | |_| | |_) | |_");
+            Console.WriteLine(@"|_____/ \___/|_| |_|  \__|     \/  \/ \__,_|_| |_|\__,_|  \_____|_|   \__, | .__/ \__|");
+            Console.WriteLine(@"                                                                      __ / | |");
+            Console.WriteLine(@"                                                                     |____/|_|");
         }
-    }
 
-    class Program
-    {
-        static Bitmap EncryptBitmap(string path, BitArray messageBits)
+        public static string GetPassword()
+        {
+            string pwd = "";
+            while (true)
+            {
+                ConsoleKeyInfo i = Console.ReadKey(true);
+                if (i.Key == ConsoleKey.Enter)
+                {
+                    break;
+                }
+                else if (i.Key == ConsoleKey.Backspace)
+                {
+                    if (pwd.Length > 0)
+                    {
+                        pwd = pwd.Remove(pwd.Length - 1, 1);
+                        Console.Write("\b \b");
+                    }
+                }
+                else
+                {
+                    pwd += i.KeyChar;
+                    Console.Write("*");
+                }
+            }
+            return pwd;
+        }
+
+        static Bitmap HideMessageInBitmap(Bitmap bitmap, BitArray messageBits, DataType dataType)
         {
             // should be 32 bits
             BitArray messageSizeBits = BinaryConverter.ToBinary(messageBits.Length);
+            // should be 8 bits
+            BitArray dataTypeSizeBits = BinaryConverter.ToBinary((byte)dataType);
 
-            messageBits = messageBits.Prepend(messageSizeBits);
+            messageBits = messageBits.Prepend(dataTypeSizeBits).Prepend(messageSizeBits);
 
             int i = 0;
 
-            var bitmap = new Bitmap(path);
             for (int x = 0; x < bitmap.Width; x++)
             {
                 for (int y = 0; y < bitmap.Height; y++)
@@ -85,10 +102,11 @@ namespace DontWanaCrypt
             return bitmap;
         }
 
-        static BitArray DecryptBitmap(Bitmap bitmap)
+        static (BitArray data, DataType type) GetDataFromBitmap(Bitmap bitmap)
         {
             int i = 0;
             BitArray messageLengthBits = new BitArray(32);
+            BitArray messageTypeBits = new BitArray(8);
             int messageLength = 0;
 
             var bits = new List<bool>();
@@ -106,10 +124,14 @@ namespace DontWanaCrypt
                     };
 
                     foreach (char key in new char[] { 'r', 'g', 'b' })
-                    {
+                    {                        
                         var v = rgb[key];
-                        if (i >= 32)
+                        if (i >= 40)
                             bits.Add(v % 2 == 1);
+                        else if (i >= 32)
+                        {
+                            messageTypeBits[i - 32] = v % 2 == 1;
+                        }
                         else
                             messageLengthBits[i] = v % 2 == 1;
                         i++;
@@ -117,41 +139,146 @@ namespace DontWanaCrypt
                         if (i >= 31)
                             messageLength = BinaryConverter.ToNumeral(messageLengthBits);
 
-                        if (i >= 32 && i - 32 >= messageLength)
-                            return new BitArray(bits.ToArray());
+                        if (i >= 40 && i - 40 >= messageLength)
+                        {
+                            return (
+                                data: new BitArray(bits.ToArray()),
+                                type: (DataType)BinaryConverter.ToNumeral(messageTypeBits)
+                            );
+                        }
                     }
 
                 }
             }
-            return new BitArray(bits.ToArray());
+            return (
+                data: new BitArray(bits.ToArray()),
+                type: (DataType)BinaryConverter.ToNumeral(messageTypeBits)
+            );
         }
 
         // TODO: encode message length too
         static void Main(string[] args)
         {
-            var path = "C:/Users/domin/wallpaper.jpg";
-            var pathOut = "C:/Users/domin/wallpaper2.jpg";
+            Validator PathValidator = new Validator("Invalid path", v => File.Exists(v));
+            Validator ImageValidator = new Validator("Invalid image extension", v => (new string[] { "png", "jpg" }).Contains(v.Split('.')[v.Split('.').Length - 1]));
+            Validator ImageLosslessValidator = new Validator("Must use lossless compression", v => (new string[] { "png", "jpg" }).Contains(v.Split('.')[v.Split('.').Length - 1]));
 
-            Console.Write("Data: ");
-            string message = Console.ReadLine();
-            byte[] messageBytes = Encoding.ASCII.GetBytes(message);
-            BitArray messageBits = new BitArray(messageBytes);
+            PrintBanner();
+            
+            string choice = OneInput.Input(new InputConfiguration {
+                Pre = "Would you like to: \n" +
+                "\t1. Hide data in an image\n" +
+                "\t2. Get hidden data from an image",
+                Label = "Choice",
+                Validators = new Validator[] { new Validator("Valid option", s => s == "1" || s == "2") },
+                ShowValidationErrors = false
+            });
 
-            // encrypt
-            Console.WriteLine("Encrypting...");
-            var encryptedBitmap = EncryptBitmap(path, messageBits);
-            encryptedBitmap.Save(pathOut);
+            if (choice == "1")
+            {
+                string path = OneInput.Input(new InputConfiguration
+                {
+                    Label = "Original image path",
+                    Validators = new Validator[] { PathValidator, ImageValidator }
+                });
+                string pathOut = OneInput.Input(new InputConfiguration
+                {
+                    Label = "Output image path",
+                    Validators = new Validator[] { ImageValidator, ImageLosslessValidator}
+                });
+
+                string password = OneInput.Input(new InputConfiguration
+                {
+                    Label = "Password",
+                    Type = InputType.Password,
+                    Validators = new Validator[] { new Validator("Must be at least 8 characters", v => v.Length >= 8) }
+                });
+
+                Console.WriteLine();
+
+                Console.Write("Data type (image or text): ");
+                string inputType = Console.ReadLine().ToLower();
+
+                byte[] messageBytes = new byte[] { };
+
+                if (inputType == "image")
+                {
+                    Console.Write("Hidden image path: ");
+                    string hiddenImagePath = Console.ReadLine();
+                    Bitmap hiddenBitmap = new Bitmap(hiddenImagePath);
+                    messageBytes = BinaryUtils.ImageToBytes(hiddenBitmap);
+
+                } else if (inputType == "text")
+                {
+                    Console.Write("Message: ");
+                    string message = Console.ReadLine();
+                    messageBytes = Encoding.ASCII.GetBytes(message);
+                }
+                else
+                {
+                    Console.WriteLine("Invalid data type.");
+                    return;
+                }
+                
+                byte[] encryptedMessageBytes = Aes.Encrypt(messageBytes, Encoding.ASCII.GetBytes(password));
+                BitArray encryptedMessageBits = new BitArray(encryptedMessageBytes);
+
+                //TODO progress bar
+                var bitmap = new Bitmap(path);
+                var encryptedBitmap = HideMessageInBitmap(bitmap, encryptedMessageBits, DataType.PlainText);
+                encryptedBitmap.Save(pathOut);
+                encryptedBitmap.Dispose();
+            }
+            else if (choice == "2")
+            {
+                Console.Clear();
+                /*
+                string path = OneInput.Input(new InputConfiguration
+                {
+                    Label = "Original image path",
+                    Validators = new Validator[] { PathValidator, ImageValidator, ImageLosslessValidator }
+                });
 
 
-            Console.WriteLine("Decrypting...");
-            var decrypted = DecryptBitmap(encryptedBitmap);
+                Console.Write("Password: ");
+                var password = OneInput.Input(new InputConfiguration {
+                    Label = "Password",
+                    Type = InputType.Password
+                });
+                */
+                string path = "C:/users/domin/wallpaper2.png";
+                var password = "fsociety";
+                var encryptedBitmap = new Bitmap(path);
 
-            byte[] decryptedMessageBytes = BinaryUtils.BitArrayToByteArray(decrypted);
-            string decryptedAscii = Encoding.ASCII.GetString(decryptedMessageBytes);
-            Console.WriteLine(decryptedAscii);
-            Console.WriteLine("Done...");
+                Console.WriteLine("Decrypting...");
+                var encrypted = GetDataFromBitmap(encryptedBitmap);
+                byte[] messageBytes = BinaryUtils.BitArrayToByteArray(encrypted.data);
+                try
+                {
+                    byte[] decryptedMessage = Aes.Decrypt(messageBytes, Encoding.ASCII.GetBytes(password));
+                    switch(encrypted.type)
+                    {
+                        case DataType.PlainText:
+                            string decryptedAscii = Encoding.ASCII.GetString(decryptedMessage);
+                            Console.WriteLine(decryptedAscii);
+                            break;
+                        case DataType.Image:
+                            Console.Write("Image Detected. Path to image output: ");
+                            string pathOut = Console.ReadLine();
+                            Bitmap bmp;
+                            using (var ms = new MemoryStream(decryptedMessage))
+                            {
+                                bmp = new Bitmap(ms);
+                                bmp.Save(pathOut);
+                            }
+                            Process.Start(pathOut);
+                            break;
+                    }
 
-            Console.WriteLine();
+                } catch (CryptographicException) {
+                    Console.WriteLine("Invalid password");
+                }
+            }
 
             Console.ReadLine();
         }
